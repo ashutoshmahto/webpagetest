@@ -6,6 +6,7 @@ require_once('common.inc');
 require_once('archive.inc');
 ignore_user_abort(true);
 set_time_limit(3300);   // only allow it to run for 55 minutes
+error_reporting(E_ALL);
 if (php_sapi_name() == "cli" && function_exists('proc_nice'))
   proc_nice(19);
 
@@ -14,6 +15,11 @@ $lock = Lock("Archive", false, 3600);
 if (!isset($lock)) {
   echo "Archive process is already running\n";
   exit(0);
+}
+
+$archive_kept_days = null;
+if (array_key_exists('archive_kept_days', $settings) && is_numeric($settings['archive_kept_days'])) {
+  $archive_kept_days = $settings['archive_kept_days'];
 }
 
 if (array_key_exists('archive_days', $settings)) {
@@ -29,22 +35,25 @@ if (array_key_exists('archive_dir', $settings)) {
 
 $kept = 0;
 $archiveCount = 0;
+$archivesDeletedCount = 0;
 $deleted = 0;
 $log = fopen('./cli/archive.log', 'w');
 
 // check the old tests first
 /*
 *   Archive any tests that have not already been archived
-*   We will also keep track of all of the tests that are 
+*   We will also keep track of all of the tests that are
 *   known to have been archived separately so we don't thrash
-*/  
+*/
 $UTC = new DateTimeZone('UTC');
 
 $now = time();
 
 if ((isset($archive_dir) && strlen($archive_dir)) ||
+  (array_key_exists('archive_url', $settings) && strlen($settings['archive_url'])) ||
   (array_key_exists('archive_s3_server', $settings) && strlen($settings['archive_s3_server']))) {
   CheckRelay();
+  CheckVideos();
   CheckOldDir('./results/old');
 
   // Archive the actual tests
@@ -65,24 +74,69 @@ if ((isset($archive_dir) && strlen($archive_dir)) ||
               CheckDay($dayDir, "$year$month$day", $elapsedDays, $forced_only);
             }
           }
-          rmdir($monthDir);
+          @rmdir($monthDir);
         }
       }
-      rmdir($yearDir);
+      @rmdir($yearDir);
     }
   }
 }
+
+if (isset($archive_kept_days) && isset($archive_dir) && strlen($archive_dir)) {
+  $years = scandir($archive_dir . 'results/');
+  foreach ($years as $year) {
+    $yearDir = $archive_dir . "results/$year";
+    if (is_numeric($year) && is_dir($yearDir) && ElapsedDays($year, '01', '01') > $archive_kept_days) {
+      $months = scandir($yearDir);
+      foreach ($months as $month) {
+        $monthDir = "$yearDir/$month";
+        if (is_numeric($month) && is_dir($monthDir) && ElapsedDays($year, $month, '01') > $archive_kept_days) {
+          $days = scandir($monthDir);
+          foreach ($days as $day) {
+            $dayDir = "$monthDir/$day";
+            if (is_numeric($day) && is_dir($dayDir) && ElapsedDays($year, $month, $day) > $archive_kept_days) {
+              DeleteArchivedFiles($dayDir);
+              @rmdir($dayDir);
+            }
+          }
+          @rmdir($monthDir);
+        }
+      }
+      @rmDir($yearDir);
+    }
+  }
+}
+
 echo "\nDone\n\n";
 
 if( $log ) {
-    fwrite($log, "Archived: $archiveCount\nDeleted: $deleted\nKept: $kept\n" . gmdate('r') . "\n");;
+    fwrite($log, "Archived: $archiveCount\nDeleted: $deleted\nKept: $kept\nArchives deleted: $archivesDeletedCount\n" . gmdate('r') . "\n");;
     fclose($log);
 }
 Unlock($lock);
 
+function DeleteArchivedFiles($dir) {
+  global $archivesDeletedCount;
+  $paths = scandir($dir);
+  if (isset($paths) && is_array($paths) && count($paths)) {
+    foreach ($paths as $path) {
+      if ($path != '.' && $path != '..') {
+        $absoulutePath = "$dir/$path";
+        if (preg_match('/.*.zip$/', $path)) {
+          unlink($absoulutePath);
+          $archivesDeletedCount++;
+        } else {
+          DeleteArchivedFiles($absoulutePath);
+          @rmdir($absoulutePath);
+        }
+      }
+    }
+  }
+}
+
 /**
 * Clean up the relay directory of old tests
-* 
+*
 */
 function CheckRelay() {
   $dirs = scandir('./results/relay');
@@ -145,26 +199,28 @@ function CheckRelay() {
 
 /**
 * Recursively scan the old directory for tests
-* 
+*
 * @param mixed $path
 */
 function CheckOldDir($path) {
-  $oldDirs = scandir($path);
-  foreach( $oldDirs as $oldDir ) {
-    if( $oldDir != '.' && $oldDir != '..' ) {
-      // see if it is a test or a higher-level directory
-      if( is_file("$path/$oldDir/testinfo.ini") )
-        CheckTest("$path/$oldDir", $oldDir, 1000);
-      else
-        CheckOldDir("$path/$oldDir");
+  if (is_dir($path)) {
+    $oldDirs = scandir($path);
+    foreach( $oldDirs as $oldDir ) {
+      if( $oldDir != '.' && $oldDir != '..' ) {
+        // see if it is a test or a higher-level directory
+        if( is_file("$path/$oldDir/testinfo.ini") )
+          CheckTest("$path/$oldDir", $oldDir, 1000, FALSE);
+        else
+          CheckOldDir("$path/$oldDir");
+      }
     }
+    @rmdir($path);
   }
-  @rmdir($path);
 }
 
 /**
 * Recursively check within a given day
-* 
+*
 * @param mixed $dir
 * @param mixed $baseID
 * @param mixed $archived
@@ -193,8 +249,8 @@ function CheckDay($dir, $baseID, $elapsedDays, $forced_only) {
 }
 
 /**
-* Check the given log file for all tests that match
-* 
+* Check the given logfile for all matching tests
+*
 * @param mixed $logFile
 * @param mixed $match
 */
@@ -204,18 +260,19 @@ function CheckTest($testPath, $id, $elapsedDays, $forced_only) {
   global $kept;
   global $log;
   global $MIN_DAYS;
-  global $MAX_DAYS;
   $logLine = "$id ($elapsedDays): ";
 
   echo "\rArc:$archiveCount, Del:$deleted, Kept:$kept, Checking:" . str_pad($id,45);
 
   $delete = false;
-  if ($elapsedDays > $MAX_DAYS) {
-    $logLine .= "Old test, deleting";
-    $delete = true;
+  if (is_file("$testPath/test.waiting")) {
+    // Skip tests that are still queued
+  } elseif (is_file("$testPath/test.running")) {
+    // Skip tests that are still running
   } elseif (!is_file("$testPath/testinfo.ini") &&
       !is_file("$testPath/testinfo.json.gz") &&
       !is_file("$testPath/testinfo.json")) {
+    $logLine .= "Invalid test";
     $delete = true;
   } else {
     $needs_archive = is_file("$testPath/archive.me");
@@ -225,43 +282,35 @@ function CheckTest($testPath, $id, $elapsedDays, $forced_only) {
       $elapsed = TestLastAccessed($id);
       if (isset($elapsed)) {
         $logLine .= "Last Accessed $elapsed days";
-        if ($elapsed >= 0.5) {
+        if ($elapsed >= $MIN_DAYS) {
           $needs_archive = true;
           $logLine .= " Archiving";
         }
-      } else {
-        $delete = true;
       }
     }
     if ($needs_archive) {
       if (ArchiveTest($id) ) {
         $archiveCount++;
-        $logLine .= "Archived";
+        $logLine .= " Archived";
         $delete = true;
-        usleep(1000);
-      } else if ($elapsed < 60) {
-        $status = GetTestStatus($id, true);
-        $logLine .= " status {$status['statusCode']}";
-        if ($status['statusCode'] >= 400 ||
-            ($status['statusCode'] == 102 &&
-             $status['remote'] &&
-             $elapsed > 1)) {
-          $delete = true;
-        }
       } else {
-        $logLine .= "Failed to archive";
+        $logLine .= " Failed to archive";
       }
     }
   }
 
   if ($delete) {
-    delTree("$testPath/");
-    $deleted++;
-    $logLine .= " Deleted";
+    if (VerifyArchive($id)) {
+      delTree("$testPath/");
+      $deleted++;
+      $logLine .= " Deleted";
+    } else {
+      $logLine .= " Verification Failed";
+    }
   } else {
     $kept++;
   }
-        
+
   if( $log ) {
     $logLine .= "\n";
     fwrite($log, $logLine);
@@ -278,6 +327,86 @@ function ElapsedDays($year, $month, $day) {
   $daytime = $date->getTimestamp();
   $elapsed = max($now - $daytime, 0) / 86400;
   return $elapsed;
+}
+
+// Scan the videos for videos that need to be archived or deleted
+function CheckVideos() {
+  $years = scandir('./results/video');
+  foreach ($years as $year) {
+    $yearDir = "./results/video/$year";
+    if (is_numeric($year) && is_dir($yearDir) && $year != '.' && $year != '..') {
+      $months = scandir($yearDir);
+      foreach ($months as $month) {
+        $monthDir = "$yearDir/$month";
+        if (is_dir($monthDir) && $month != '.' && $month != '..') {
+          $days = scandir($monthDir);
+          foreach( $days as $day ) {
+            $dayDir = "$monthDir/$day";
+            if (is_dir($dayDir) && $day != '.' && $day != '..') {
+              CheckVideoDay($dayDir, "$year$month$day");
+            }
+          }
+          @rmdir($monthDir);
+        }
+      }
+      @rmdir($yearDir);
+    }
+  }
+}
+
+function CheckVideoDay($dir, $baseID) {
+  if (is_dir($dir)) {
+    $videos = scandir($dir);
+    if (isset($videos) && is_array($videos) && count($videos)) {
+      foreach( $videos as $video ) {
+        if( $video != '.' && $video != '..' ) {
+          // see if it is a test or a higher-level directory
+          if( is_file("$dir/$video/video.ini") || is_file("$dir/$video/video.mp4") ) {
+            CheckVideo("$dir/$video", "{$baseID}_$video");
+          } else {
+            // We're likely looking at a shard directory, loop through the actual videos
+            CheckVideoDay("$dir/$video", "{$baseID}_$video");
+          }
+        }
+      }
+    }
+    @rmdir($dir);
+  }
+}
+
+function CheckVideo($videoPath, $id) {
+  global $archiveCount;
+  global $deleted;
+  global $kept;
+  global $log;
+  $logLine = "Video $id: ";
+
+  echo "\rArc:$archiveCount, Del:$deleted, Kept:$kept, Video:" . str_pad($id,45);
+
+  if (is_file("$videoPath/.archive")) {
+    // See if it has been over a day since it has been accessed (if so, delete it)
+    $elapsed = time() - filemtime("$videoPath/.archive");
+    if ($elapsed > 3600) {
+      delTree("$videoPath/");
+      $deleted++;
+      $logLine .= "Deleted";
+    } else {
+      $kept++;
+      $logLine .= "Kept ($elapsed seconds since last access)";
+    }
+  } else {
+    if (ArchiveVideo($id) ) {
+      $archiveCount++;
+      $logLine .= "Archived";
+    } else {
+      $logLine .= "Failed to archive";
+    }
+  }
+
+  if( $log ) {
+    $logLine .= "\n";
+    fwrite($log, $logLine);
+  }
 }
 
 ?>

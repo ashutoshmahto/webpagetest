@@ -1,4 +1,4 @@
-The RaspberryPi works well as a tethered host for driving [WebPageTest mobile agents](https://sites.google.com/a/webpagetest.org/docs/private-instances/node-js-agent/setup).  Here is a walkthrough in configuring it as well as some discussion on deployment options.
+The RaspberryPi works well as a tethered host for driving the mobile agent.  Here is a walkthrough in configuring it as well as some discussion on deployment options.
 
 It is worth noting that these instructions may not be the BEST way to configure a RaspberryPi, but this is how they have been configured on the [public instance](http://www.webpagetest.org) and is known to work.
 
@@ -14,7 +14,7 @@ It is worth noting that these instructions may not be the BEST way to configure 
 	- [These](http://www.amazon.com/Rankie%C2%AE-Premium-Charging-Samsung-Motorola/dp/B00UFG5GVM?ie=UTF8&psc=1&redirect=true&ref_=oh_aui_detailpage_o06_s00) have worked well on the public instance
 - Ethernet Cable (Recommended)
 	- Assumes the Pi will be hard-wired which is what is detailed in this doc.  The Pi 3 supports WiFi as well but that configuration is not documented (and eliminates the option to reverse-tether the phone which provides consistency improvements)
-	- [This](http://www.amazon.com/Hexagon-Network-Ethernet-Internet-Connectors/dp/B00VZXS008?ie=UTF8&psc=1&redirect=true&ref_=oh_aui_detailpage_o08_s01) is the cable used on the public instance devices, mostly because they take up less space but any working cable is fine.
+	- [This](https://www.amazon.com/Hexagon-Network-Ethernet-Shielded-Connectors/dp/B00WSKQ5ZO) is the cable used on the public instance devices, mostly because they take up less space but any working cable is fine.
 - Power Supply (Optional)
 	- To save space when deploying multiple devices the public instance uses [10-way USB power chargers](http://www.amazon.com/Anker-10-Port-Charger-Multi-Port-PowerPort/dp/B00YRYS4T4?ie=UTF8&psc=1&redirect=true&ref_=oh_aui_detailpage_o09_s00)
 - Switch (Optional)
@@ -93,6 +93,11 @@ For the initial setup you will also need a USB keyboard and monitor with HDMI in
 		- ```net.ipv6.conf.default.disable_ipv6 = 1```
 		- ```net.ipv6.conf.lo.disable_ipv6 = 1```
 	- Save and exit
+21. Disable hardware checksum offload (at least if using reverse-tethering). There is a kernel bug that reports tons of checksum errors for bridged interfaces.
+        - ```sudo apt-get install ethtool```
+	- ```sudo nano /etc/ec.local```
+	- Add the config before the ```exit 0``` at the end of the file
+		- ```ethtool --offload eth0 rx off tx off```
 
 ## Install Software Dependencies ##
 The WebPageTest node agent requires NodeJS, Python, imagemagick and ffmpeg as well as the pillow and psutil python modules.  Most of these can be installed directly but ffmpeg is not currently available through apt so it needs to be built directly on the Pi.

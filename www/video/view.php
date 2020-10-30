@@ -1,7 +1,16 @@
 <?php
 chdir('..');
+if( array_key_exists('embed', $_REQUEST) && $_REQUEST['embed'] )
+{
+  $ALLOW_IFRAME = true;
+}
 include 'common.inc';
-$videoId = $_REQUEST['id'];
+require_once('archive.inc');
+if (isset($_REQUEST['id']) && !preg_match('/^[\w\.\-_]+$/', $_REQUEST['id'])) {
+  header("HTTP/1.0 404 Not Found");
+  die();
+}
+$videoId = htmlspecialchars($_REQUEST['id']);
 $valid = false;
 $done = false;
 $embed = false;
@@ -21,14 +30,14 @@ if (array_key_exists('data', $_REQUEST) && $_REQUEST['data']) {
   $displayData = true;
 }
 if (array_key_exists('bgcolor', $_REQUEST))
-    $bgcolor = $_REQUEST['bgcolor'];
+    $bgcolor = htmlspecialchars($_REQUEST['bgcolor']);
 if (array_key_exists('color', $_REQUEST))
-    $color = $_REQUEST['color'];
+    $color = htmlspecialchars($_REQUEST['color']);
 $autoplay = 'false';
 if (array_key_exists('autoplay', $_REQUEST) && $_REQUEST['autoplay'])
     $autoplay = 'true';
 
-$page_keywords = array('Video','comparison','Webpagetest','Website Speed Test');
+$page_keywords = array('Video','comparison','WebPageTest','Website Speed Test');
 $page_description = "Side-by-side video comparison of website performance.";
 
 $xml = false;
@@ -41,8 +50,9 @@ if( array_key_exists('f', $_REQUEST)) {
 }
 
 $ini = null;
-$title = "WebPagetest - Visual Comparison";
+$title = "WebPageTest - Visual Comparison";
 
+RestoreVideoArchive($videoId);
 $dir = GetVideoPath($videoId, true);
 if( is_dir("./$dir") )
 {
@@ -55,7 +65,7 @@ if( is_dir("./$dir") )
             GenerateVideoThumbnail("./$dir");
         }
     }
-    
+
     // get the video time
     $date = gmdate("M j, Y", filemtime("./$dir"));
     if( is_file("./$dir/video.mp4")  )
@@ -73,7 +83,7 @@ if( is_dir("./$dir") )
             $title .= $label;
         }
     }
-    
+
     $location = null;
     if (gz_is_file("./$dir/testinfo.json")) {
         $tests = json_decode(gz_file_get_contents("./$dir/testinfo.json"), true);
@@ -102,7 +112,7 @@ if( $xml || $json )
         {
             $code = 200;
 
-            $protocol = ((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] == 'on') || (isset($_SERVER['HTTP_SSL']) && $_SERVER['HTTP_SSL'] == 'On')) ? 'https' : 'http';
+            $protocol = getUrlProtocol();
             $host  = $_SERVER['HTTP_HOST'];
             $uri   = rtrim(dirname($_SERVER['PHP_SELF']), '/\\');
             $videoUrl = "$protocol://$host$uri/download.php?id=$videoId";
@@ -126,7 +136,7 @@ if( $xml )
     echo "<statusCode>$code</statusCode>\n";
     echo "<statusText>$error</statusText>\n";
     if( strlen($_REQUEST['r']) )
-        echo "<requestId>{$_REQUEST['r']}</requestId>\n";
+        echo "<requestId>" . htmlspecialchars($_REQUEST['r']) . "</requestId>\n";
     echo "<data>\n";
     echo "<videoId>$videoId</videoId>\n";
     if( strlen($videoUrl) )
@@ -169,20 +179,19 @@ else
             <noscript>
             <meta http-equiv="refresh" content="10" />
             </noscript>
-            <script language="JavaScript">
+            <script>
             setTimeout( "window.location.reload(true)", 10000 );
             </script>
             <?php
         }
         ?>
-        <?php 
+        <?php
             if( !$embed )
             {
-                $gaTemplate = 'Video'; 
-                include ('head.inc'); 
+                $gaTemplate = 'Video';
+                include ('head.inc');
             }
         ?>
-        <link rel="stylesheet" href="/video/video-js.3.2.0/video-js.min.css" type="text/css">
         <style type="text/css">
             .content h2 {
                 font-size: 1.5em;
@@ -254,15 +263,11 @@ else
               echo "color: " . htmlspecialchars($lightcolor) . ";\n";
               ?>
             }
-            .vjs-default-skin .vjs-controls {height: 0;}
-            .vjs-default-skin .vjs-mute-control {display: none;}
-            .vjs-default-skin .vjs-volume-control {display: none;}
             <?php
             if( $embed )
                 echo "body {background-color: " . htmlspecialchars($bgcolor) . "; margin:0; padding: 0;}";
             ?>
         </style>
-        <script type="text/javascript" src="/video/video-js.3.2.0/video.min.js"></script>
         <script type="text/javascript">
             function ShowEmbed() {
                 $("#embed").modal({opacity:80});
@@ -304,43 +309,18 @@ else
                 if( array_key_exists('height', $_REQUEST) && $_REQUEST['height'] )
                     $height = (int)$_REQUEST['height'];
 
-                echo "<script>\n";
-                if (array_key_exists('html', $_REQUEST) && $_REQUEST['html'])
-                    echo "_V_.options.techOrder = ['html5', 'flash'];\n";
-                else
-                    echo "_V_.options.techOrder = ['flash', 'html5'];\n";
-                echo "_V_.options.flash.swf = '/video/player/flowplayer-3.2.16.swf';\n";
-                echo "_V_.options.flash.flashVars = {config:\"{";
-                echo "'clip':{'scaling':'fit'},";
-                echo "'plugins':{'controls':{'volume':false,'mute':false,'stop':true,'tooltips':{'buttons':true,'fullscreen':'Enter fullscreen mode'}}},";
-                echo "'canvas':{'backgroundColor':'#000000','backgroundGradient':'none'},";
-                if ($hasThumb) {
-                    echo "'playlist':[{'url':'/$dir/video.png'},{'url':'/$dir/video.mp4','autoPlay':$autoplay,'autoBuffering':false}]";
-                } else {
-                    echo "'playlist':[{'url':'/$dir/video.mp4','autoPlay':$autoplay,'autoBuffering':true}]";
-                }
-                echo "}\"};\n";
-                echo "_V_.options.flash.params = {
-                       allowfullscreen: 'true',
-                       wmode: 'transparent',
-                       allowscriptaccess: 'always'
-                   };
-                   _V_.options.flash.attributes={};\n";
-                echo "</script>\n";
-                    
-                echo "<video id=\"player\" class=\"video-js vjs-default-skin\" controls
-                  preload=\"auto\" width=\"$width\" height=\"$height\"";
-                if ($hasThumb) {
-                    echo " poster=\"/$dir/video.png\"";
-                }
-                echo "data-setup=\"{}\">
+                $poster = "";
+                if ($hasThumb)
+                  $poster = "poster=\"/$dir/video.png\"";
+                echo "<video id=\"player\" controls muted
+                       preload=\"auto\" width=\"$width\" height=\"$height\" $poster>
                     <source src=\"/$dir/video.mp4\" type='video/mp4'>
                 </video>";
 
                 if(!$embed) {
                     echo "<br><a class=\"link\" href=\"/video/download.php?id=$videoId\">Download</a> | ";
                     echo '<a class="link" href="javascript:ShowEmbed()">Embed</a>';
-                    $protocol = ((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] == 'on') || (isset($_SERVER['HTTP_SSL']) && $_SERVER['HTTP_SSL'] == 'On')) ? 'https' : 'http';
+                    $protocol = getUrlProtocol();
                     $dataText = 'View as data comparison';
                     $dataUrl = "$protocol://{$_SERVER['HTTP_HOST']}{$_SERVER['PHP_SELF']}?id=$videoId&data=1";
                     if ($displayData) {
@@ -359,17 +339,38 @@ else
             else
                 echo '<h1>The requested video does not exist.  Please try creating it again and if the problem persists please contact us.</h1>';
             ?>
-            
-            <?php 
+
+            <?php
                 if (!$embed)
-                    include('footer.inc'); 
+                    include('footer.inc');
             ?>
         </div>
+        <script>
+          var video = document.getElementById('player');
+          var started = false;
+          video.addEventListener('click',function(){
+              video.paused ? video.play() : video.pause();
+          },false);
+          video.addEventListener('mouseenter',function(){
+            if (started) {
+              video.setAttribute("controls","controls");
+            }
+          },false);
+          video.addEventListener('mouseleave',function(){
+            if (started) {
+              video.removeAttribute("controls");
+            }
+          },false);
+          video.addEventListener('play',function(){
+            started = true;
+            video.removeAttribute("controls");
+          },false);
+        </script>
         <div id="embed" style="display:none;">
             <h3>Video Embed</h3>
-            <p>Copy and past the code below into a website to embed the video.</p>  
-            <p>You can adjust the size of the video as necessary by changing the 
-            width and height parameters<br>(make sure to change both the parameters on 
+            <p>Copy and past the code below into a website to embed the video.</p>
+            <p>You can adjust the size of the video as necessary by changing the
+            width and height parameters<br>(make sure to change both the parameters on
             the src URL and the iFrame).</p>
             <p id="embed-code">
             <?php
@@ -379,7 +380,7 @@ else
               $dimensions = "&width=$width&height=$height";
               $framesize = " width=\"$width\" height=\"$height\"";
             }
-            $protocol = ((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] == 'on') || (isset($_SERVER['HTTP_SSL']) && $_SERVER['HTTP_SSL'] == 'On')) ? 'https' : 'http';
+            $protocol = getUrlProtocol();
             echo htmlspecialchars("<iframe src=\"$protocol://{$_SERVER['HTTP_HOST']}{$_SERVER['PHP_SELF']}?id=$videoId&embed=1$dimensions\"$framesize></iframe>");
             ?>
             </p>
@@ -394,7 +395,7 @@ else
 function DisplayData() {
   global $tests;
   $metrics = array('loadTime' => 'Page Load Time',
-                   'SpeedIndex' => '<a href="https://sites.google.com/a/webpagetest.org/docs/using-webpagetest/metrics/speed-index">Speed Index</a> (lower is better)');
+                   'SpeedIndex' => '<a href="https://github.com/WPO-Foundation/webpagetest-docs/blob/master/user/Metrics/SpeedIndex.md">Speed Index</a> (lower is better)');
   echo '<br><table class="batchResults" border="1" cellpadding="15" cellspacing="0">
           <tr>
           <th class="empty"></th>';

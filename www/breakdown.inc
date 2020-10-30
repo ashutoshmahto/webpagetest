@@ -1,8 +1,8 @@
 <?php
 require_once('object_detail.inc');
-require_once('contentColors.inc'); 
+require_once('contentColors.inc');
 
-if(extension_loaded('newrelic')) { 
+if(extension_loaded('newrelic')) {
     newrelic_add_custom_tracer('getBreakdown');
     newrelic_add_custom_tracer('getBreakdownCombined');
 }
@@ -11,7 +11,7 @@ define('BREAKDOWN_CACHE_VERSION', 4);
 
 /**
 * Aggregate the individual requests by mime type
-* 
+*
 * @param mixed $requests
 */
 function getBreakdown($id, $testPath, $run, $cached, &$requests) {
@@ -41,7 +41,7 @@ function getBreakdownForStep($localPaths, $rootUrlGenerator, &$requests) {
         $secure = false;
         $haveLocations = false;
         $requests = getRequestsForStep($localPaths, $rootUrlGenerator, $secure);
-        
+
         $breakdown = array();
         $mime_colors = MimeColors();
         foreach ($mime_colors as $contentType => $color) {
@@ -53,7 +53,7 @@ function getBreakdownForStep($localPaths, $rootUrlGenerator, &$requests) {
                 );
             $breakdown["$contentType"] = $entry;
         }
-        
+
         foreach($requests as $request) {
           if (isset($request['contentType']) && isset($request['url'])) {
             $contentType = ContentType($request['contentType'], $request['url']);
@@ -68,14 +68,50 @@ function getBreakdownForStep($localPaths, $rootUrlGenerator, &$requests) {
         }
         $cache[$cacheKey] = $breakdown;
         gz_file_put_contents($cache_file, json_encode($cache));
+
+        // Collect other analysis that requires access to the request data
+        analyzeRequests($localPaths, $requests);
     }
-    
+
     return $breakdown;
 }
 
 /**
+* Run through the requests and collect page-level analysis for them
+*
+* @param mixed $localPaths
+* @param mixed $requests
+*/
+function analyzeRequests($localPaths, &$requests) {
+  $analysis_file = $localPaths->requestsAnalysisFile();
+  if (!gz_is_file($analysis_file)) {
+    $analysis = array('smallImageCount' => 0,
+                      'bigImageCount' => 0,
+                      'maybeCaptcha' => 0);
+    foreach($requests as $request) {
+      if (isset($request['contentType']) && isset($request['objectSize']) && isset($request['url'])) {
+        $contentType = ContentType($request['contentType'], $request['url']);
+        if ($contentType == 'image') {
+          if ($request['objectSize'] > 100000) {
+            $analysis['bigImageCount']++;
+          } elseif ($request['objectSize'] > 100 && $request['objectSize'] < 10000) {
+            $analysis['smallImageCount']++;
+          }
+        }
+      }
+      if (isset($request['url'])) {
+        if (strpos($request['url'], 'recaptcha/api.js') !== false) {
+          $analysis['maybeCaptcha'] = 1;
+        }
+      }
+    }
+    gz_file_put_contents($analysis_file, json_encode($analysis));
+  }
+}
+
+/**
 * Get a combined result that has both first and repeat view data
-* 
+*
 * @param mixed $id
 * @param mixed $run
 */
@@ -119,7 +155,7 @@ function getBreakdownCombined($id, $testPath, $run)
             $combined[$type] = $fv;
         }
     }
-    
+
     return $combined;
 }
 ?>

@@ -67,7 +67,7 @@ function GetDevToolsRequestsForStep($localPaths, &$requests, &$pageData) {
     $startOffset = null;
     $ver = 14;
     $ok = GetCachedDevToolsRequests($localPaths, $requests, $pageData, $ver);
-    if (!$ok) {
+    if (!$ok && !GetSetting('disable_devtools_processing')) {
       if (GetDevToolsEventsForStep(null, $localPaths, $events, $startOffset)) {
           if (DevToolsFilterNetRequests($events, $rawRequests, $rawPageData)) {
               $requests = array();
@@ -183,6 +183,11 @@ function GetDevToolsRequestsForStep($localPaths, &$requests, &$pageData) {
                         GetDevToolsHeaderValue($rawRequest['response']['headers'], 'Content-Type', $request['contentType']);
                         GetDevToolsHeaderValue($rawRequest['response']['headers'], 'Content-Encoding', $request['contentEncoding']);
                         GetDevToolsHeaderValue($rawRequest['response']['headers'], 'Content-Length', $request['objectSize']);
+                    }
+                    if (isset($request['contentType'])) {
+                      $pos = strpos($request['contentType'], ';');
+                      if ($pos !== false)
+                        $request['contentType'] = substr($request['contentType'], 0, $pos);
                     }
                     $request['type'] = 3;
                     $request['socket'] = isset($rawRequest['response']['connectionId']) ? $rawRequest['response']['connectionId'] : -1;
@@ -354,7 +359,7 @@ function GetDevToolsRequestsForStep($localPaths, &$requests, &$pageData) {
               $pageData['connections'] = count($connections);
           }
       }
-      if (count($requests)) {
+      if (isset($requests) && is_array($requests) && count($requests)) {
         if ($pageData['responses_200'] == 0) {
           if (array_key_exists('responseCode', $requests[0]))
             $pageData['result'] = $requests[0]['responseCode'];
@@ -423,7 +428,8 @@ function ProcessNetlogRequests($localPaths, &$pageData, &$requests) {
         if (isset($request['full_url'])) {
           // Find the first matching request in the netlog
           foreach ($netlog as $index => $entry) {
-            if (isset($entry['url']) && isset($entry['start']) && !isset($entry['claimed']) && $entry['url'] == $request['full_url']) {
+            if (isset($entry['url']) && isset($entry['start']) && !isset($entry['claimed']) &&
+                $entry['url'] == $request['full_url']) {
               $netlog[$index]['claimed'] = true;
               foreach ($mapping as $from => $to) {
                 if (isset($entry[$from])) {
@@ -439,6 +445,7 @@ function ProcessNetlogRequests($localPaths, &$pageData, &$requests) {
                 $request['load_ms'] = intval(round($entry['end'] - $entry['start']));
               if (isset($entry['pushed']) && $entry['pushed'])
                 $request['was_pushed'] = 1;
+              break;
             }
           }
         }
@@ -674,12 +681,21 @@ function GetCachedDevToolsRequests($localPaths, &$requests, &$pageData, $ver) {
   $cache = null;
   if (count($MEMCACHE_GetCachedDevToolsRequests) > 100)
     $MEMCACHE_GetCachedDevToolsRequests = array();
-  $cacheFile = $localPaths->devtoolsRequestsCacheFile($ver);
+  $cacheFile = $localPaths->devtoolsProcessedRequestsFile();
   if (isset($MEMCACHE_GetCachedDevToolsRequests[$cacheFile])) {
     $cache = $MEMCACHE_GetCachedDevToolsRequests[$cacheFile];
   } elseif (gz_is_file($cacheFile)) {
     $cache = json_decode(gz_file_get_contents($cacheFile), true);
     $MEMCACHE_GetCachedDevToolsRequests[$cacheFile] = $cache;
+  }
+  if (!isset($cache)) {
+    $cacheFile = $localPaths->devtoolsRequestsCacheFile($ver);
+    if (isset($MEMCACHE_GetCachedDevToolsRequests[$cacheFile])) {
+      $cache = $MEMCACHE_GetCachedDevToolsRequests[$cacheFile];
+    } elseif (gz_is_file($cacheFile)) {
+      $cache = json_decode(gz_file_get_contents($cacheFile), true);
+      $MEMCACHE_GetCachedDevToolsRequests[$cacheFile] = $cache;
+    }
   }
   if (isset($cache) &&
       isset($cache['requests']) &&
@@ -725,7 +741,9 @@ function DevToolsFilterNetRequests($events, &$requests, &$pageData) {
     $idMap = array();
     $endTimestamp = null;
     foreach ($events as $event) {
-      if (isset($event['timestamp']) && (!isset($endTimestamp) || $event['timestamp'] > $endTimestamp))
+      if (isset($event['method'])) {
+        if (isset($event['timestamp']) &&
+          (!isset($endTimestamp) || $event['timestamp'] > $endTimestamp))
         $endTimestamp = $event['timestamp'];
         if (!isset($main_frame) &&
             $event['method'] == 'Page.frameStartedLoading' &&
@@ -890,6 +908,7 @@ function DevToolsFilterNetRequests($events, &$requests, &$pageData) {
             ParseDevToolsDOMContentLoaded($event['record'], $main_frame, $pageData);
           }
         }
+      }
     }
     // Go through and error-out any requests that were started but never got a response or error
     if (isset($endTimestamp)) {
@@ -1339,7 +1358,7 @@ function DevToolsGetCPUSlicesForStep($localPaths) {
   $trace_file = $localPaths->devtoolsTraceFile() . ".gz";
   $script_timing = $localPaths->devtoolsScriptTimingFile() . ".gz";
   if (!GetSetting('disable_timeline_processing') && !is_file($slices_file) && is_file($trace_file) && is_file(__DIR__ . '/lib/trace/trace-parser.py')) {
-    $script = realpath(__DIR__ . '/lib/trace/trace-parser.py');
+    $script = realpath(__DIR__ . '/lib/trace/trace_parser.py');
     touch($slices_file);
     if (is_file($slices_file)) {
       $slices_file = realpath($slices_file);

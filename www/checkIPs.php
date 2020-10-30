@@ -40,7 +40,7 @@ for ($offset = 0; $offset <= $days; $offset++) {
           if (array_key_exists(14, $parts))
             $count = intval(trim($parts[14]));
           $count = max(1, $count);
-          if( ($privateInstall || $admin) && strlen($key) && $key != $keys['server']['key'] ) {
+          if( ($admin) && strlen($key) && $key != $keys['server']['key'] ) {
             if (!isset($users[$ip]))
               $users[$ip] = array();
             if (!in_array($key, $users[$ip]))
@@ -69,24 +69,28 @@ for ($offset = 0; $offset <= $days; $offset++) {
 // sort the counts descending
 arsort($counts);
 
-$title = 'WebPagetest - Check IPs';
+$title = 'WebPageTest - Check IPs';
 include 'admin_header.inc';
 
 echo '<table class="table"><tr><th>Total</th>';
 
-foreach( $dayCounts as $index => &$dayCount ) {
-  echo "<th>Day $index</th>";
+if ($days < 15) {
+  foreach( $dayCounts as $index => &$dayCount ) {
+    echo "<th>Day $index</th>";
+  }
 }
 echo '<th>IP Address (API Keys)</th></tr>';
 
 foreach($counts as $ip => $count) {
   if ($count > 500) {
     echo "<tr><td>$count</td>";
-    foreach ($dayCounts as $index => &$dayCount) {
-      $c = 0;
-      if( isset($dayCount[$ip]) )
-        $c = $dayCount[$ip];
-      echo "<td>$c</td>";
+    if ($days < 15) {
+      foreach ($dayCounts as $index => &$dayCount) {
+        $c = 0;
+        if( isset($dayCount[$ip]) )
+          $c = $dayCount[$ip];
+        echo "<td>$c</td>";
+      }
     }
     $names = '';
     if (isset($users[$ip])) {

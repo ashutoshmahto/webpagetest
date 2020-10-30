@@ -2,7 +2,11 @@
 chdir('..');
 $settings = null;
 require_once('common_lib.inc');
-require_once('video/visualProgress.inc.php');
+require_once('archive.inc');
+require_once __DIR__ . '/visualProgress.inc.php';
+require_once __DIR__ . '/../include/TestInfo.php';
+require_once __DIR__ . '/../include/TestResults.php';
+require_once __DIR__ . '/../include/TestStepResult.php';
 ignore_user_abort(true);
 set_time_limit(3600);
 error_reporting(E_ERROR | E_PARSE);
@@ -137,6 +141,7 @@ if (isset($tests) && count($tests)) {
     file_put_contents("$videoPath/video.ini", $ini);
     Unlock($lock);
   }
+  ArchiveVideo($videoId);
 }
 
 $elapsed = microtime(true) - $start;
@@ -177,7 +182,12 @@ function RenderVideo(&$tests) {
     if (isset($test['path']) &&
         isset($test['run']) &&
         isset($test['cached'])) {
-      $progress = GetVisualProgress("./{$test['path']}", $test['run'], $test['cached']);
+      if (isset($test['step'])) {
+        $localPaths = new TestPaths('./' . $test['path'], $test["run"], $test["cached"], $test["step"]);
+        $progress = GetVisualProgressForStep($localPaths, false);
+      } else {
+        $progress = GetVisualProgress("./{$test['path']}", $test['run'], $test['cached']);
+      }
       if (isset($progress) && is_array($progress) && isset($progress['frames'])) {
         $test['frames'] = $progress['frames'];
         if (count($test['frames'])) {
@@ -588,8 +598,8 @@ function DrawFrameTime(&$test, $frameTime, $im, $rect) {
     $fraction = sprintf("%03d", $fraction);
   if (!isset($test['endText']) &&
       isset($stopTime) &&
-      isset($test['pageData'][$test['run']][$test['cached']][$stopTime]) &&
-      $frameTime >= $test['pageData'][$test['run']][$test['cached']][$stopTime]) {
+      isset($test['pageData'][$stopTime]) &&
+      $frameTime >= $test['pageData'][$stopTime]) {
     $prefix = isset($stopText) ? "$stopText " : '';
     $test['endText'] = "$prefix$seconds.$fraction$suffix";
   }

@@ -1,16 +1,23 @@
-<?php 
+<?php
 include 'common.inc';
 require_once('page_data.inc');
-$page_keywords = array('View Custom Metrics','Webpagetest','Website Speed Test','Page Speed');
+$page_keywords = array('View Custom Metrics','WebPageTest','Website Speed Test','Page Speed');
 $page_description = "View Custom Metrics";
 ?>
 <!DOCTYPE html>
 <html>
     <head>
-        <title>WebPagetest - View Custom Metrics</title>
+        <title>WebPageTest - View Custom Metrics</title>
         <meta http-equiv="charset" content="iso-8859-1">
         <meta name="author" content="Patrick Meenan">
         <?php $gaTemplate = 'ViewCSI'; include ('head.inc'); ?>
+        <style>
+        table.pretty td, table.pretty th {
+            overflow: hidden;
+            text-align: left;
+            max-width: 800px;
+        }
+        </style>
     </head>
     <body>
         <div class="page">
@@ -18,9 +25,10 @@ $page_description = "View Custom Metrics";
             $tab = 'Test Result';
             include 'header.inc';
             ?>
-            
+
             <div id="result">
             <?php
+            $pageData = loadAllPageData($testPath);
             if (isset($pageData) &&
                 is_array($pageData) &&
                 array_key_exists($run, $pageData) &&
@@ -44,7 +52,7 @@ $page_description = "View Custom Metrics";
             }
             ?>
             </div>
-            
+
             <?php include('footer.inc'); ?>
         </div>
     </body>
@@ -56,7 +64,7 @@ function GetCSIData() {
     global $testPath;
     global $runs;
     global $testInfo;
-    
+
     $csi = array();
     $csi['fv'] = array();
     for ($run = 1; $run <= $runs; $run++) {
@@ -67,7 +75,7 @@ function GetCSIData() {
             $csi['fv'][$name][$run] = $value;
         }
     }
-    
+
     if (!$testInfo['fvonly']) {
         $csi['rv'] = array();
         for ($run = 1; $run <= $runs; $run++) {
@@ -79,7 +87,7 @@ function GetCSIData() {
             }
         }
     }
-    
+
     return $csi;
 }
 

@@ -75,7 +75,7 @@ if( isset($test['test']) && (isset($test['test']['completeTime']) || $test['test
         } else {
           csvPageData($testData['id'], $path, $test['test']['runs']);
         }
-        
+
         foreach( $testData['v'] as $variationIndex => $variationId ) {
           $path = './' . GetTestPath($variationId);
           $testInfo = GetTestInfo($path);
@@ -98,7 +98,7 @@ if( isset($test['test']) && (isset($test['test']['completeTime']) || $test['test
       $hasCSV = true;
     else
       $hasCSV = false;
-    // loop through all  of the results files (one per run) - both cached and uncached
+    // loop through all of the results files (one per run) - both cached and uncached
     if ($hasCSV) {
       echo "$header,\"Run\",\"Cached\"";
       if (!$is_requests)
@@ -168,7 +168,7 @@ function csvArray(&$array, $id, $run, $cached) {
     $array['id'] = $id;
     $array['run'] = $run;
     $array['cached'] = $cached;
-    
+
     if (!isset($fields)) {
       $fields = array();
     }
@@ -220,9 +220,9 @@ function printResult() {
 
 function SpeedIndex($testPath, $run, $cached, $testInfo) {
   $speed_index = '';
-  $pageData = loadPageRunData($testPath, $run, $cached, null, $testInfo);
+  $pageData = loadPageRunData($testPath, $run, $cached, $testInfo);
   $startOffset = array_key_exists('testStartOffset', $pageData) ? intval(round($pageData['testStartOffset'])) : 0;
-  $progress = GetVisualProgress($testPath, $run, $cached, null, null, $startOffset);
+  $progress = GetVisualProgress($testPath, $run, $cached, $startOffset);
   if (isset($progress) && is_array($progress) && array_key_exists('SpeedIndex', $progress)) {
     $speed_index = $progress['SpeedIndex'];
   }
@@ -230,8 +230,8 @@ function SpeedIndex($testPath, $run, $cached, $testInfo) {
 }
 
 /**
-* Take a tab-separated file, convert it to csv and spit it out
-* 
+* Take a tab-separated file, convert it to CSV and spit it out
+*
 * @param mixed $fileName
 * @param mixed $includeHeader
 */

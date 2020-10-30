@@ -1,15 +1,22 @@
 <?php
-if(extension_loaded('newrelic')) { 
-  newrelic_add_custom_tracer('ProcessIncrementalResult');
-  newrelic_add_custom_tracer('CompressTextFiles');
-  newrelic_add_custom_tracer('loadPageStepData');
-  newrelic_add_custom_tracer('loadVideo');
+if(extension_loaded('newrelic')) {
+  newrelic_add_custom_tracer('ProcessRun');
+  newrelic_add_custom_tracer('loadAllPageData');
+  newrelic_add_custom_tracer('getRequestsForStep');
+  newrelic_add_custom_tracer('LockTest');
+  newrelic_add_custom_tracer('UpdateTester');
   newrelic_add_custom_tracer('GetVisualProgressForStep');
   newrelic_add_custom_tracer('GetDevToolsCPUTimeForStep');
-  newrelic_add_custom_tracer('getBreakdown');
+  newrelic_add_custom_tracer('GetDevToolsRequestsForStep');
+  newrelic_add_custom_tracer('loadUserTimingData');
   newrelic_add_custom_tracer('GetVisualProgress');
   newrelic_add_custom_tracer('DevToolsGetConsoleLog');
-  newrelic_add_custom_tracer('ExtractZipFile');
+  newrelic_add_custom_tracer('SecureDir');
+  newrelic_add_custom_tracer('loadPageRunData');
+  newrelic_add_custom_tracer('loadPageStepData');
+  newrelic_add_custom_tracer('ParseUserTiming');
+  newrelic_add_custom_tracer('CalculateTimeToInteractive');
+
 }
 
 chdir('..');
@@ -27,7 +34,7 @@ require_once('./video/avi2frames.inc.php');
 require_once __DIR__ . '/../include/ResultProcessing.php';
 
 if (!isset($included)) {
-  error_reporting(E_ERROR | E_PARSE);
+  error_reporting(E_ERROR | E_WARNING | E_PARSE | E_NOTICE);
   header('Content-type: text/plain');
   header("Cache-Control: no-cache, must-revalidate");
   header("Expires: Sat, 26 Jul 1997 05:00:00 GMT");
@@ -35,12 +42,11 @@ if (!isset($included)) {
 set_time_limit(3600);
 ignore_user_abort(true);
 
-$key  = $_REQUEST['key'];
-$id   = $_REQUEST['id'];
+$key  = isset($_REQUEST['key']) ? $_REQUEST['key'] : null;
+$id   = isset($_REQUEST['id']) ? $_REQUEST['id'] : null;
 
-if(extension_loaded('newrelic')) { 
+if(extension_loaded('newrelic')) {
   newrelic_add_custom_parameter('test', $id);
-  newrelic_add_custom_parameter('location', $location);
 }
 
 $workdone_start = microtime(true);
@@ -65,9 +71,9 @@ else
 // params can be set by a client to declare that they support a new
 // behavior.  Once all clients are updated, they should be removed.
 
-// Should zipped har uploads be flattened?  The main user is the mobitest iOS
+// Should zipped HAR uploads be flattened?  The main user is the mobitest iOS
 // agent.  The agent will be updated to always set this, but until we can
-// re-image all agents we need to support the old behavior for a while.
+// re-image all agents, we need to support the old behavior for a while.
 $flattenUploadedZippedHar =
     arrayLookupWithDefault('flattenZippedHar', $_REQUEST, false);
 
@@ -90,6 +96,7 @@ $testInfo_dirty = false;
 if (ValidateTestId($id)) {
   $testPath = './' . GetTestPath($id);
   $testInfo = GetTestInfo($id);
+  $medianMetric = GetSetting('medianMetric', 'loadTime');
   if (isset($testInfo['medianMetric']))
     $medianMetric = $testInfo['medianMetric'];
   if (!$testInfo || !array_key_exists('location', $testInfo)) {
@@ -102,6 +109,7 @@ if (ValidateTestId($id)) {
     $locKey = GetLocationKey($location);
     if ((!strlen($locKey) || !strcmp($key, $locKey)) || !strcmp($_SERVER['REMOTE_ADDR'], "127.0.0.1")) {
       $testErrorStr = '';
+      $errorStr = '';
       if (array_key_exists('testerror', $_REQUEST) && strlen($_REQUEST['testerror']))
         $testErrorStr = ', Test Error: "' . $_REQUEST['testerror'] . '"';
       if (array_key_exists('error', $_REQUEST) && strlen($_REQUEST['error']))
@@ -111,7 +119,7 @@ if (ValidateTestId($id)) {
       if (!isset($testLock))
         logTestMsg($id, "Failed to lock test");
       $testInfo = GetTestInfo($id);
-      
+
       // Figure out the path to the results.
       $ini = parse_ini_file("$testPath/testinfo.ini");
       $time = time();
@@ -126,7 +134,7 @@ if (ValidateTestId($id)) {
           array_key_exists('tester', $testInfo) &&
           strlen($testInfo['tester']))
         $tester = $testInfo['tester'];
-                          
+
       if (array_key_exists('shard_test', $testInfo) && $testInfo['shard_test'])
         ProcessIncrementalResult();
 
@@ -165,15 +173,15 @@ if (ValidateTestId($id)) {
           }
         }
       }
-      
+
       // keep track of any overall or run-specific errors reported by the agent
       if (array_key_exists('testerror', $_REQUEST) && strlen($_REQUEST['testerror'])) {
         $testInfo['test_error'] = $_REQUEST['testerror'];
         $testInfo_dirty = true;
       }
-      if (isset($runNumber) && 
-          isset($cacheWarmed) && 
-          array_key_exists('error', $_REQUEST) && 
+      if (isset($runNumber) &&
+          isset($cacheWarmed) &&
+          array_key_exists('error', $_REQUEST) &&
           strlen($_REQUEST['error'])) {
         if (!array_key_exists('errors', $testInfo))
           $testInfo['errors'] = array();
@@ -184,36 +192,7 @@ if (ValidateTestId($id)) {
       }
 
       // Do any post-processing on this individual run
-      if (isset($runNumber) && isset($cacheWarmed)) {
-        $resultProcessing = new ResultProcessing($testPath, $id, $runNumber, $cacheWarmed);
-        $testerError = $resultProcessing->postProcessRun();
-
-        if ($testInfo['fvonly'] || $cacheWarmed) {
-          if (!array_key_exists('test_runs', $testInfo))
-            $testInfo['test_runs'] = array();
-          if (array_key_exists($runNumber, $testInfo['test_runs']))
-            $testInfo['test_runs'][$runNumber]['done'] = true;
-          else
-            $testInfo['test_runs'][$runNumber] = array('done' => true);
-          $numSteps = $resultProcessing->countSteps();
-          $reportedSteps = 0;
-          if (!empty($testInfo['test_runs'][$runNumber]['steps'])) {
-            $reportedSteps = $testInfo['test_runs'][$runNumber]['steps'];
-            if ($reportedSteps != $numSteps) {
-              $testerError = "Number of steps for first and repeat view differ (fv: $reportedSteps, rv: $numSteps)";
-            }
-          }
-          $testInfo['test_runs'][$runNumber]['steps'] = max($numSteps, $reportedSteps);
-          $testInfo_dirty = true;
-        }
-        if (!GetSetting('disable_video_processing')) {
-          if ($testInfo['video'])
-            $workdone_video_start = microtime(true);
-          ProcessAVIVideo($testInfo, $testPath, $runNumber, $cacheWarmed, $max_load);
-          if ($testInfo['video'])
-            $workdone_video_end = microtime(true);
-        }
-      }
+      ProcessRun();
 
       if (strlen($location) && strlen($tester)) {
         $testerInfo = array();
@@ -230,7 +209,7 @@ if (ValidateTestId($id)) {
           $rebooted = false;
         UpdateTester($location, $tester, $testerInfo, $cpu, $testerError, $rebooted);
       }
-              
+
       // see if the test is complete
       if ($done) {
         // Mark the test as done and save it out so that we can load the page data
@@ -252,7 +231,7 @@ if (ValidateTestId($id)) {
         $testInfo['steps'] = $numSteps;
         SaveTestInfo($id, $testInfo);
         $testInfo_dirty = false;
-        
+
         // delete any .test files
         $files = scandir($testPath);
         foreach ($files as $file)
@@ -260,14 +239,14 @@ if (ValidateTestId($id)) {
             unlink("$testPath/$file");
         if (array_key_exists('job_file', $testInfo) && is_file($testInfo['job_file']))
           unlink($testInfo['job_file']);
-        
+
         $perTestTime = 0;
         $testCount = 0;
 
         // do pre-complete post-processing
         MoveVideoFiles($testPath);
         WptHookPostProcessResults(__DIR__ . '/../' . $testPath);
-        
+
         if (!isset($pageData))
           $pageData = loadAllPageData($testPath);
         $medianRun = GetMedianRun($pageData, 0, $medianMetric);
@@ -275,9 +254,9 @@ if (ValidateTestId($id)) {
         $testInfo_dirty = true;
 
         // delete all of the videos except for the median run?
-        if( array_key_exists('median_video', $ini) && $ini['median_video'] )
+        if( array_key_exists('median_video', $ini) && $ini['median_video'])
           KeepVideoForRun($testPath, $medianRun);
-        
+
         $test = file_get_contents("$testPath/testinfo.ini");
         $now = gmdate("m/d/y G:i:s", $time);
 
@@ -288,28 +267,6 @@ if (ValidateTestId($id)) {
             $complete .= "\r\nmedianRun=$medianRun";
           $out = str_replace('[test]', $complete, $test);
           file_put_contents("$testPath/testinfo.ini", $out);
-        }
-        
-        // see if it is an industry benchmark test
-        if (array_key_exists('industry', $ini) && array_key_exists('industry_page', $ini) && 
-          strlen($ini['industry']) && strlen($ini['industry_page'])) {
-          if( !is_dir('./video/dat') )
-            mkdir('./video/dat', 0777, true);
-          $indLock = Lock("Industry Video");
-          if (isset($indLock)) {
-            // update the page in the industry list
-            $ind;
-            $data = file_get_contents('./video/dat/industry.dat');
-            if( $data )
-              $ind = json_decode($data, true);
-            $update = array();
-            $update['id'] = $id;
-            $update['last_updated'] = $now;
-            $ind[$ini['industry']][$ini['industry_page']] = $update;
-            $data = json_encode($ind);
-            file_put_contents('./video/dat/industry.dat', $data);
-            Unlock($indLock);
-          }
         }
       }
 
@@ -322,11 +279,14 @@ if (ValidateTestId($id)) {
       /*************************************************************************
       * Do No modify TestInfo after this point
       **************************************************************************/
-        
-      // do any post-processing when the full test is complete that doesn't rely on testinfo        
+
+      // do any post-processing when the full test is complete that doesn't rely on testinfo
       if ($done) {
         logTestMsg($id, "Test Complete");
 
+        touch("$testPath/test.complete");
+        @unlink("$testPath/test.running");
+      
         // send an async request to the post-processing code so we don't block
         SendAsyncRequest("/work/postprocess.php?test=$id");
       }
@@ -338,23 +298,44 @@ if (ValidateTestId($id)) {
 
 $workdone_end = microtime(true);
 
-/*
-if (isset($workdone_video_start) && isset($workdone_video_end)) {
-  $elapsed = intval(($workdone_end - $workdone_start) * 1000);
-  $video_elapsed = intval(($workdone_video_end - $workdone_video_start) * 1000);
-  if ($video_elapsed > 10)
-    logMsg("$elapsed ms - video processing: $video_elapsed ms - Test $id, Run $runNumber:$cacheWarmed", './work/workdone.log', true);
+function ProcessRun() {
+  global $runNumber, $cacheWarmed, $testPath, $id, $testInfo, $testInfo_dirty, $testerError;
+  if (isset($runNumber) && isset($cacheWarmed)) {
+    $resultProcessing = new ResultProcessing($testPath, $id, $runNumber, $cacheWarmed);
+    $testerError = $resultProcessing->postProcessRun();
+
+    if ($testInfo['fvonly'] || $cacheWarmed) {
+      if (!array_key_exists('test_runs', $testInfo))
+        $testInfo['test_runs'] = array();
+      if (array_key_exists($runNumber, $testInfo['test_runs']))
+        $testInfo['test_runs'][$runNumber]['done'] = true;
+      else
+        $testInfo['test_runs'][$runNumber] = array('done' => true);
+      $numSteps = $resultProcessing->countSteps();
+      $reportedSteps = 0;
+      if (!empty($testInfo['test_runs'][$runNumber]['steps'])) {
+        $reportedSteps = $testInfo['test_runs'][$runNumber]['steps'];
+        if ($reportedSteps != $numSteps) {
+          $testerError = "Number of steps for first and repeat view differ (fv: $reportedSteps, rv: $numSteps)";
+        }
+      }
+      $testInfo['test_runs'][$runNumber]['steps'] = max($numSteps, $reportedSteps);
+      $testInfo_dirty = true;
+    }
+    if (!GetSetting('disable_video_processing')) {
+      ProcessAVIVideo($testInfo, $testPath, $runNumber, $cacheWarmed);
+    }
+  }
 }
-*/
 
 /**
 * Delete all of the video files except for the median run
-* 
+*
 * @param mixed $id
 */
 function KeepVideoForRun($testPath, $run)
 {
-  if ($run) {
+  if ($run && !GetSetting('keep_all_video')) {
     $dir = opendir($testPath);
     if ($dir) {
       while($file = readdir($dir)) {
@@ -395,7 +376,7 @@ function RemoveSensitiveHeaders($file) {
 
 /**
 * Reset the state of the given test directory (delete all the results)
-* 
+*
 * @param mixed $testDir
 */
 function ResetTestDir($testPath) {
@@ -412,7 +393,7 @@ function ResetTestDir($testPath) {
 
 /**
 * Handle sharded test results where they come in individually
-* 
+*
 */
 function ProcessIncrementalResult() {
   global $testPath;
@@ -425,14 +406,13 @@ function ProcessIncrementalResult() {
   global $id;
 
   if ($done) {
-    logMsg("$id - " . json_encode($testInfo['shards_finished']), __DIR__ . '/workdone.txt', true);
     // mark this shard as done
     if (!isset($testInfo['shards_finished']))
       $testInfo['shards_finished'] = array();
     $testInfo['shards_finished'][$runNumber] = true;
     $testInfo_dirty = true;
     logTestMsg($id, "Marked shard $runNumber as complete: " . json_encode($testInfo['shards_finished']));
-    
+
     // make sure all of the sharded tests are done
     for ($run = 1; $run <= $testInfo['runs'] && $done; $run++) {
       if (!isset($testInfo['shards_finished'][$run]) || $testInfo['shards_finished'][$run] !== true)
@@ -441,7 +421,7 @@ function ProcessIncrementalResult() {
     if ($done) {
       logTestMsg($id, "All {$testInfo['runs']} runs are complete");
     }
-    
+
     if (!$done &&
         array_key_exists('discarded', $testInfo['test_runs'][$runNumber]) &&
         $testInfo['test_runs'][$runNumber]['discarded']) {
@@ -452,89 +432,6 @@ function ProcessIncrementalResult() {
       }
     }
   }
-}
-
-/**
-* Check the given test against our block list to see if the test bypassed our blocks.
-* If it did, add the domain to the automatic blocked domains list
-* 
-*/
-function CheckForSpam() {
-    global $testPath;
-    global $id;
-    global $runNumber;
-    global $cacheWarmed;
-    global $testInfo;
-    global $testInfo_dirty;
-
-    if (isset($testInfo) && 
-        !array_key_exists('spam', $testInfo) &&
-        strpos($id, '.') == false &&
-        !strlen($testInfo['user']) &&
-        !strlen($testInfo['key']) &&
-        is_file('./settings/blockurl.txt')) {
-        $blocked = false;
-        $blockUrls = file('./settings/blockurl.txt', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        if (count($blockUrls)) {
-            if (!isset($runNumber))
-                $runNumber = 1;
-            if (!isset($cacheWarmed))
-                $cacheWarmed = 0;
-
-            $secure = false;
-            $requests = getRequests($id, $testPath, $runNumber, $cacheWarmed, $secure);
-            if (isset($requests) && is_array($requests) && count($requests)) {
-                foreach($requests as &$request) {
-                    if (array_key_exists('full_url', $request)) {
-                        $url = $request['full_url'];
-                        foreach( $blockUrls as $block ) {
-                            $block = trim($block);
-                            if (strlen($block) && (preg_match("/$block/i", $url))) {
-                                $date = gmdate("Ymd");
-                                // add the top-level page domain to the block list
-                                $pageUrl = $requests[0]['full_url'];
-                                $host = '';
-                                if (strlen($pageUrl)) {
-                                    $parts = parse_url($pageUrl);
-                                    $host = trim($parts['host']);
-                                    if (strlen($host) &&
-                                        strcasecmp($host, 'www.google.com') &&
-                                        strcasecmp($host, 'google.com') &&
-                                        strcasecmp($host, 'www.youtube.com') &&
-                                        strcasecmp($host, 'youtube.com')) {
-                                        // add it to the auto-block list if it isn't already there
-                                        if (is_file('./settings/blockdomainsauto.txt'))
-                                            $autoBlock = file('./settings/blockdomainsauto.txt', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-                                        if (!isset($autoBlock) || !is_array($autoBlock))
-                                            $autoBlock = array();
-                                        $found = false;
-                                        foreach($autoBlock as $entry) {
-                                            if (!strcasecmp($entry, $host)) {
-                                                $found = true;
-                                                break;
-                                            }
-                                        }
-                                        if (!$found) {
-                                            $autoBlock[] = $host;
-                                            file_put_contents('./settings/blockdomainsauto.txt', implode("\r\n", $autoBlock));
-                                        }
-                                    }
-                                }
-                                logMsg("[$id] $host: $pageUrl referenced $url which matched $block", "./log/{$date}-auto_blocked.log", true);
-                                
-                                $blocked = true;
-                                break 2;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if ($blocked) {
-          $testInfo['spam'] = $blocked;
-          $testInfo_dirty = true;
-        }
-    }
 }
 
 function CompressTextFiles($testPath) {
@@ -568,14 +465,25 @@ function ExtractZipFile($file, $testPath) {
   logTestMsg($id, "Extracting $zipsize byte uploaded file '$file' to '$testPath'");
   $zip = new ZipArchive();
   if ($zip->open($file) === TRUE) {
-    $extractPath = realpath($testPath);
-    if ($extractPath !== false) {
-      if (!$zip->extractTo($extractPath))
-        logTestMsg($id, "Error extracting uploaded zip file '$file' to '$testPath'");
-      $zip->close();
+    $valid = true;
+    // Make sure all of the uploaded files are appropriate
+    for ($i=0; $i < $zip->numFiles; $i++) {
+      $entry = $zip->getNameIndex($i);
+      if (substr($entry, -1) == '/') continue; // skip directories
+      $fileName = basename($entry);
+      if (!validateUploadFileName($fileName))
+        $valid = false;
+    }
+    if ($valid) {
+      $extractPath = realpath($testPath);
+      if ($extractPath !== false) {
+        if (!$zip->extractTo($extractPath))
+          logTestMsg($id, "Error extracting uploaded ZIP file '$file' to '$testPath'");
+        $zip->close();
+      }
     }
   } else {
-    logTestMsg($id, "Error opening uploaded zip file '$file'");
+    logTestMsg($id, "Error opening uploaded ZIP file '$file'");
   }
 }
 ?>

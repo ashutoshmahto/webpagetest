@@ -7,7 +7,7 @@ chdir('..');
 include 'common.inc';
 require_once('page_data.inc');
 require_once('draw.inc');
-include 'video/filmstrip.inc.php';  // include the commpn php shared across the filmstrip code
+include 'video/filmstrip.inc.php';  // include the common PHP shared across the filmstrip code
 
 $colMargin = 5;
 $rowMargin = 5;
@@ -95,7 +95,7 @@ $im = imagecreatetruecolor($width, $height);
 $background = GetColor($im, $bgcolor[0], $bgcolor[1], $bgcolor[2]);
 $textColor = GetColor($im, $color[0], $color[1], $color[2]);
 $colChanged = GetColor($im, 254,179,1);
-$colAFT = GetColor($im, 255,0,0);
+$colLCP = GetColor($im, 255,0,0);
 
 imagefilledrectangle($im, 0, 0, $width, $height, $background);
 
@@ -138,6 +138,10 @@ foreach( $tests as &$test ) {
         imagedestroy($thumb);
         unset($thumb);
     }
+    $lcp = null;
+    if (isset($test['stepResult']) && is_a($test['stepResult'], "TestStepResult")) {
+        $lcp = $test['stepResult']->getMetric('chromeUserTiming.LargestContentfulPaint');
+    }
     $frameCount = 0;
     $ms = 0;
     $localPaths = new TestPaths(GetTestPath($test['id']), $test['run'], $test['cached'], $test['step']);
@@ -163,8 +167,13 @@ foreach( $tests as &$test ) {
                 $cached = '_cached';
             $imgPath = $videoDir . "/" . $path;
             if( $lastThumb != $path || !$thumb ) {
-                if( $lastThumb != $path )
+                if( $lastThumb != $path ) {
                     $border = $colChanged;
+                    if (isset($lcp) && $ms >= $lcp) {
+                        $border = $colLCP;
+                        $lcp = null;
+                    }
+                }
                 // load the new thumbnail
                 if( $thumb ) {
                     imagedestroy($thumb);
@@ -180,7 +189,7 @@ foreach( $tests as &$test ) {
                     imagedestroy($tmp);
                 }
             }
-            
+
             // draw the thumbnail
             $left += $colMargin;
             $width = imagesx($thumb);
@@ -189,11 +198,11 @@ foreach( $tests as &$test ) {
                 imagefilledrectangle($im, $left - 2 + $padding, $top - 2, $left + imagesx($thumb) + 2 + $padding, $top + imagesy($thumb) + 2, $border);
             imagecopy($im, $thumb, $left + $padding, $top, 0, 0, $width, imagesy($thumb));
             $left += $columnWidth + $colMargin;
-            
+
             $lastThumb = $path;
         }
     }
-    
+
     $top += $test['video']['thumbHeight'] + $rowMargin;
 }
 
